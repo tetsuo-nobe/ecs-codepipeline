@@ -1,0 +1,546 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Infrastructure for ECS Blue/Green deployment with AWS CodePipeline
+
+Parameters:
+  # ECS タスク実行ロールを新規作成するかどうか
+  CreateTaskExecutionRole:
+    Type: String
+    Description: ecsTaskExecutionRole を新規作成する場合は true、既存のロールを使用する場合は false
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  # [Blue/Green] Bake Time の設定（分）
+  # Blue/Green デプロイ後、Blue と Green の両方が同時に稼働する監視期間
+  BakeTimeInMinutes:
+    Type: Number
+    Description: Blue/Green デプロイ後の Bake Time（分）。この期間中に問題があればロールバック可能
+    Default: 5
+    MinValue: 0
+
+  # 初期タスク定義で使用するコンテナイメージ
+  # スタック作成時点では ECR にアプリのイメージが存在しないため、パブリックな nginx イメージで起動する
+  # 以降のデプロイは CodePipeline がビルドしたイメージに置き換える
+  InitialImage:
+    Type: String
+    Description: 初期タスク定義で使用するコンテナイメージ（以降は CodePipeline がデプロイする）
+    Default: public.ecr.aws/nginx/nginx:stable
+
+Conditions:
+  ShouldCreateRole: !Equals [!Ref CreateTaskExecutionRole, 'true']
+
+Resources:
+  # ============================================================
+  # VPC
+  # ============================================================
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: ECS-VPC
+
+  # ============================================================
+  # インターネットゲートウェイ
+  # ============================================================
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: ECS-VPC-IGW
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # ============================================================
+  # Public Subnets（2つ、異なる AZ）
+  # ============================================================
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: ECS-VPC-Public-1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: ECS-VPC-Public-2
+
+  # ============================================================
+  # Private Subnets（2つ、異なる AZ）
+  # ============================================================
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: ECS-VPC-Private-1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.4.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: ECS-VPC-Private-2
+
+  # ============================================================
+  # Public ルートテーブル
+  # ============================================================
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: ECS-VPC-Public-RT
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # ============================================================
+  # NAT ゲートウェイ（1つ）
+  # ============================================================
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachGateway
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: ECS-VPC-NAT
+
+  # ============================================================
+  # Private ルートテーブル
+  # ============================================================
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: ECS-VPC-Private-RT
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  # ============================================================
+  # ALB 用セキュリティグループ
+  # ============================================================
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: myweb-alb-sg
+      GroupDescription: Security group for ALB - Allow HTTP from internet
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: myweb-alb-sg
+
+  # ============================================================
+  # ECS タスク用セキュリティグループ
+  # ============================================================
+  ECSTaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: myweb-ecs-task-sg
+      GroupDescription: Security group for ECS tasks - Allow traffic from ALB
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: myweb-ecs-task-sg
+
+  # ============================================================
+  # ALB
+  # ============================================================
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: myweb-alb
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: myweb-alb
+
+  # ============================================================
+  # [Blue/Green] ターゲットグループ - Blue（本番用）
+  # Blue/Green デプロイでは 2 つのターゲットグループが必要
+  # ============================================================
+  TargetGroupBlue:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: myweb-tg-blue
+      Port: 80
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VPC
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  # ============================================================
+  # [Blue/Green] ターゲットグループ - Green（新バージョン用）
+  # デプロイ時に新しいタスクが登録されるターゲットグループ
+  # ============================================================
+  TargetGroupGreen:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: myweb-tg-green
+      Port: 80
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VPC
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  # ============================================================
+  # [Blue/Green] ALB リスナー
+  # ForwardConfig で Blue と Green の両方のターゲットグループを指定
+  # 初期状態では Blue に Weight:1、Green に Weight:0 を設定
+  # ============================================================
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          ForwardConfig:
+            TargetGroups:
+              - TargetGroupArn: !Ref TargetGroupBlue
+                Weight: 1
+              - TargetGroupArn: !Ref TargetGroupGreen
+                Weight: 0
+
+  # ============================================================
+  # [Blue/Green] ALB リスナールール
+  # ECS サービスの ProductionListenerRule で参照し、
+  # ECS がこのルールの Weight を操作してトラフィックを切り替える
+  # ============================================================
+  ALBListenerProdRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 1
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values:
+              - '/*'
+      Actions:
+        - Type: forward
+          ForwardConfig:
+            TargetGroups:
+              - TargetGroupArn: !Ref TargetGroupBlue
+                Weight: 1
+              - TargetGroupArn: !Ref TargetGroupGreen
+                Weight: 0
+
+  # ============================================================
+  # ECS タスク実行ロール（ECR からイメージを Pull するために必要）
+  # ============================================================
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Condition: ShouldCreateRole
+    Properties:
+      RoleName: ecsTaskExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  # ============================================================
+  # [Blue/Green] ECS インフラストラクチャロール（ロードバランサー管理用）
+  # ECS が Blue/Green デプロイ時に ALB のリスナールールを操作するための IAM ロール
+  # ============================================================
+  ECSInfrastructureRoleForLoadBalancers:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ecsInfrastructureRoleForLoadBalancers
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowAccessToECSForInfrastructureManagement
+            Effect: Allow
+            Principal:
+              Service: ecs.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonECSInfrastructureRolePolicyForLoadBalancers
+
+  # ============================================================
+  # [Blue/Green] ライフサイクルフック用 Lambda 実行ロール
+  # ============================================================
+  DeploymentHookLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ecsDeploymentHookLambdaRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  # ============================================================
+  # [Blue/Green] ライフサイクルフック用 Lambda 関数
+  # 環境変数 VALIDATION_RESULT の値でデプロイの続行/ロールバックを制御
+  #   - SUCCESS: デプロイを続行
+  #   - FAIL:    ロールバックをトリガー
+  # ============================================================
+  DeploymentHookFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: ecs-deployment-hook
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt DeploymentHookLambdaRole.Arn
+      Timeout: 30
+      Environment:
+        Variables:
+          VALIDATION_RESULT: SUCCESS
+      Code:
+        ZipFile: |
+          """
+          ECS Blue/Green デプロイメント ライフサイクルフック用 Lambda 関数
+
+          環境変数 VALIDATION_RESULT の値によってデプロイの続行・ロールバックを制御する。
+            - SUCCESS : デプロイを続行する
+            - FAIL    : デプロイを失敗させてロールバックをトリガーする
+          """
+          import os
+          import json
+
+          def handler(event, context):
+              print(f"ライフサイクルフック呼び出し: {json.dumps(event)}")
+              validation_result = os.environ.get("VALIDATION_RESULT", "SUCCESS").upper()
+              print(f"VALIDATION_RESULT = {validation_result}")
+              if validation_result == "FAIL":
+                  print("検証失敗: デプロイをロールバックします")
+                  return {"hookStatus": "FAILED"}
+              print("検証成功: デプロイを続行します")
+              return {"hookStatus": "SUCCEEDED"}
+
+  # ============================================================
+  # [Blue/Green] ECS がライフサイクルフックで Lambda を呼び出すための IAM ロール
+  # ============================================================
+  ECSLifecycleHookInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ecsLifecycleHookInvokeRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt DeploymentHookFunction.Arn
+
+  # ============================================================
+  # ECS クラスター
+  # ============================================================
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: ECS-VPC
+      CapacityProviders:
+        - FARGATE
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
+
+  # ============================================================
+  # ECS タスク定義（初期リビジョン）
+  # CodePipeline の ECS デプロイアクションは、サービスが使用中のリビジョンを元に
+  # イメージ URI だけを差し替えた新しいリビジョンを自動で登録する。
+  # コンテナ名 myweb は buildspec.yml が出力する imagedefinitions.json の name と一致させる
+  # ============================================================
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: myweb-task
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: '256'
+      Memory: '512'
+      ExecutionRoleArn: !If
+        - ShouldCreateRole
+        - !GetAtt ECSTaskExecutionRole.Arn
+        - !Sub 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      ContainerDefinitions:
+        - Name: myweb
+          Image: !Ref InitialImage
+          PortMappings:
+            - ContainerPort: 80
+              Protocol: tcp
+          Essential: true
+
+  # ============================================================
+  # [Blue/Green] ECS サービス
+  #   - DeploymentController.Type: ECS（CodeDeploy ではなく ECS 自体が管理）
+  #   - DeploymentConfiguration.Strategy: BLUE_GREEN
+  #   - LoadBalancers.AdvancedConfiguration: Blue/Green 用の追加設定
+  # CodePipeline の ECS デプロイアクションは UpdateService を呼び出すだけなので、
+  # ここで設定した Blue/Green 戦略がパイプライン経由のデプロイにもそのまま適用される
+  # ============================================================
+  ECSService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: myweb-service
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: 2
+      LaunchType: FARGATE
+      DeploymentController:
+        Type: ECS
+      DeploymentConfiguration:
+        # [Blue/Green] ECS 組み込み Blue/Green デプロイ
+        Strategy: BLUE_GREEN
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+        # [Blue/Green] トラフィック切り替え後の監視期間（分）
+        BakeTimeInMinutes: !Ref BakeTimeInMinutes
+        # [Blue/Green] デプロイ失敗時の自動ロールバック
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+        # [Blue/Green] POST_SCALE_UP ステージで Lambda を呼び出して検証する
+        LifecycleHooks:
+          - HookTargetArn: !GetAtt DeploymentHookFunction.Arn
+            RoleArn: !GetAtt ECSLifecycleHookInvokeRole.Arn
+            LifecycleStages:
+              - POST_SCALE_UP
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+          SecurityGroups:
+            - !Ref ECSTaskSecurityGroup
+      LoadBalancers:
+        - ContainerName: myweb
+          ContainerPort: 80
+          TargetGroupArn: !Ref TargetGroupBlue
+          AdvancedConfiguration:
+            AlternateTargetGroupArn: !Ref TargetGroupGreen
+            ProductionListenerRule: !Ref ALBListenerProdRule
+            RoleArn: !GetAtt ECSInfrastructureRoleForLoadBalancers.Arn
+
+# ============================================================
+# Outputs
+# ============================================================
+Outputs:
+  ALBDNSName:
+    Description: DNS name of the Application Load Balancer
+    Value: !Sub 'http://${ALB.DNSName}'
+  ClusterName:
+    Description: ECS cluster name
+    Value: !Ref ECSCluster
+  ServiceName:
+    Description: ECS service name
+    Value: !GetAtt ECSService.Name

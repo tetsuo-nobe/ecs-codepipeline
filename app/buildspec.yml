@@ -1,0 +1,31 @@
+# CodeBuild 用ビルド定義
+# 環境変数 REPOSITORY_URI / CONTAINER_NAME は CodeBuild プロジェクトの環境変数として設定する（README 手順 4-5）
+version: 0.2
+
+env:
+  shell: bash
+
+phases:
+  pre_build:
+    commands:
+      - echo "ECR にログインします"
+      - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "${REPOSITORY_URI%%/*}"
+      # イメージタグにはコミット ID の先頭 7 文字を使用（取得できない場合は日時）
+      - COMMIT_ID="${CODEBUILD_RESOLVED_SOURCE_VERSION:0:7}"
+      - IMAGE_TAG="${COMMIT_ID:-$(date +%Y%m%d%H%M%S)}"
+      - echo "イメージタグ = $IMAGE_TAG"
+  build:
+    commands:
+      - echo "Docker イメージをビルドします"
+      - docker build -t "$REPOSITORY_URI:$IMAGE_TAG" .
+  post_build:
+    commands:
+      - echo "Docker イメージを ECR に Push します"
+      - docker push "$REPOSITORY_URI:$IMAGE_TAG"
+      # ECS 標準デプロイアクションが読み込む imagedefinitions.json を出力
+      - printf '[{"name":"%s","imageUri":"%s"}]' "$CONTAINER_NAME" "$REPOSITORY_URI:$IMAGE_TAG" > imagedefinitions.json
+      - cat imagedefinitions.json
+
+artifacts:
+  files:
+    - imagedefinitions.json
