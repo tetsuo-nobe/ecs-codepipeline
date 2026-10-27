@@ -53,7 +53,7 @@ flowchart LR
 |------|------|----------|
 | 1 | ECS 環境を構築 | CloudFormation（AWS CLI） |
 | 2 | ECR リポジトリを作成 | AWS CLI |
-| 3 | CodeCommit リポジトリを作成し、Blue Page を push | マネジメントコンソール + git |
+| 3 | CodeCommit リポジトリを作成し、Blue Page を push | AWS CLI + git |
 | 4 | CodeBuild プロジェクトを作成 | マネジメントコンソール |
 | 5 | CodePipeline パイプラインを作成し、Blue Page をデプロイ | マネジメントコンソール |
 | 6 | Lambda を FAIL にして Green Page を push し、ロールバックを確認 | AWS CLI + git |
@@ -175,16 +175,18 @@ echo $REPOSITORY_URI
 
 ## 手順 3：CodeCommit リポジトリを作成してソースを push する
 
-### 3-1. CodeCommit リポジトリの作成（マネジメントコンソール）
+### 3-1. CodeCommit リポジトリの作成（AWS CLI）
 
-1. マネジメントコンソールの検索バーで「CodeCommit」と入力し、CodeCommit のコンソールを開きます。
-2. **［リポジトリを作成］** を選択します。
-3. 以下を入力します。
-   - **リポジトリ名**: `myweb-app`
-   - **説明**: 任意（例：`ECS Blue/Green ハンズオン用`）
-4. **［作成］** を選択します。
+アプリケーションのソースを格納する CodeCommit リポジトリ `myweb-app` を作成します。
 
-リポジトリの画面が表示されたら作成完了です。
+```bash
+aws codecommit create-repository \
+  --repository-name myweb-app \
+  --repository-description "ECS Blue/Green ハンズオン用" \
+  --region $AWS_REGION
+```
+
+`repositoryMetadata` にリポジトリの情報（`cloneUrlHttp` など）が表示されれば作成完了です。
 
 ### 3-2. Git の設定（CloudShell）
 
