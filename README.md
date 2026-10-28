@@ -551,20 +551,40 @@ ALB の URL にアクセスすると Green Page が表示されます。
 
 作成した順番と逆の順番で削除します。
 
-### 8-1. パイプラインの削除（マネジメントコンソール）
+### 8-1. パイプラインの削除（AWS CLI）
 
-1. CodePipeline のコンソールで `myweb-pipeline` を選択し、**［パイプラインを削除する］** を選択します。
-2. 確認欄に `delete` と入力して削除します。
+```bash
+aws codepipeline delete-pipeline --name myweb-pipeline --region $AWS_REGION
+```
 
-### 8-2. CodeBuild プロジェクトの削除（マネジメントコンソール）
+削除できたことを確認します。一覧に `myweb-pipeline` が表示されなければ削除完了です。
 
-1. CodeBuild のコンソールで `myweb-build` を選択し、**［アクション］** → **［削除］** を選択します。
-2. 確認欄に `delete` と入力して削除します。
+```bash
+aws codepipeline list-pipelines --query "pipelines[].name" --output text --region $AWS_REGION
+```
 
-### 8-3. CodeCommit リポジトリの削除（マネジメントコンソール）
+### 8-2. CodeBuild プロジェクトの削除（AWS CLI）
 
-1. CodeCommit のコンソールで `myweb-app` を選択し、**［リポジトリを削除］** を選択します。
-2. 確認欄に `delete` と入力して削除します。
+```bash
+aws codebuild delete-project --name myweb-build --region $AWS_REGION
+```
+
+削除できたことを確認します。一覧に `myweb-build` が表示されなければ削除完了です。
+
+```bash
+aws codebuild list-projects --query "projects" --output text --region $AWS_REGION
+```
+
+### 8-3. CodeCommit リポジトリの削除（AWS CLI）
+
+```bash
+aws codecommit delete-repository --repository-name myweb-app --region $AWS_REGION
+```
+
+削除されたリポジトリの ID（`repositoryId`）が表示されれば削除完了です。
+
+> [!CAUTION]
+> CodeCommit リポジトリを削除すると、push したソースコードとコミット履歴は復元できません。
 
 ### 8-4. ECR リポジトリの削除（AWS CLI）
 
@@ -579,32 +599,152 @@ aws cloudformation delete-stack --stack-name ecs-blue-green --region $AWS_REGION
 aws cloudformation wait stack-delete-complete --stack-name ecs-blue-green --region $AWS_REGION
 ```
 
-### 8-6. タスク定義の登録解除（任意）
+### 8-6. タスク定義の登録解除
 
-CodePipeline が登録したタスク定義のリビジョン（`myweb-task`）はスタック削除後も残ります。不要であれば登録解除します。
+CodePipeline が登録したタスク定義のリビジョン（`myweb-task`）は、スタックを削除しても残ります。すべてのリビジョンを登録解除します。
 
 ```bash
-for arn in $(aws ecs list-task-definitions --family-prefix myweb-task --query "taskDefinitionArns[]" --output text --region $AWS_REGION); do
+for arn in $(aws ecs list-task-definitions --family-prefix myweb-task --status ACTIVE --query "taskDefinitionArns[]" --output text --region $AWS_REGION); do
+  echo "登録解除: $arn"
   aws ecs deregister-task-definition --task-definition $arn --region $AWS_REGION > /dev/null
 done
 ```
 
-### 8-7. コンソールで自動作成されたリソースの削除（任意）
+ACTIVE なリビジョンが残っていないことを確認します。何も表示されなければ完了です。
 
-コンソールでの作成時に、以下のリソースが自動で作成されています。不要であれば削除してください。
+```bash
+aws ecs list-task-definitions --family-prefix myweb-task --status ACTIVE --query "taskDefinitionArns[]" --output text --region $AWS_REGION
+```
 
-| リソース | 名前の例 | 削除場所 |
-|----------|----------|----------|
-| EventBridge ルール | `codepipeline-myweb-a-main-xxxxxx-rule` | EventBridge コンソール → ルール |
-| IAM ロール（CodePipeline） | `AWSCodePipelineServiceRole-ap-northeast-1-myweb-pipeline` | IAM コンソール → ロール |
-| IAM ロール（CodeBuild） | `codebuild-myweb-build-service-role` | IAM コンソール → ロール |
-| IAM ロール（EventBridge） | `cwe-role-ap-northeast-1-myweb-pipeline` | IAM コンソール → ロール |
-| IAM ポリシー | `CodeBuildBasePolicy-myweb-build-ap-northeast-1` など | IAM コンソール → ポリシー |
-| CloudWatch Logs ロググループ | `/aws/codebuild/myweb-build` | CloudWatch コンソール → ロググループ |
-| S3 バケット（アーティファクトストア） | `codepipeline-ap-northeast-1-xxxxxxxx` | S3 コンソール |
+### 8-7. コンソールで自動作成されたリソースの削除（AWS CLI）
+
+手順 4・手順 5 でコンソールから作成したときに、以下のリソースが自動で作成されています。AWS CLI で順番に削除します。
+
+| リソース | 名前の例 |
+|----------|----------|
+| EventBridge ルール | `codepipeline-myweb-a-main-xxxxxx-rule` |
+| IAM ロール（CodePipeline） | `AWSCodePipelineServiceRole-ap-northeast-1-myweb-pipeline` |
+| IAM ロール（CodeBuild） | `codebuild-myweb-build-service-role` |
+| IAM ロール（EventBridge） | `cwe-role-ap-northeast-1-myweb-pipeline` |
+| IAM ポリシー（上記ロールにアタッチ） | `CodeBuildBasePolicy-myweb-build-ap-northeast-1` など |
+| CloudWatch Logs ロググループ | `/aws/codebuild/myweb-build` |
+| S3 バケット（アーティファクトストア） | `codepipeline-ap-northeast-1-xxxxxxxx` |
+
+#### 8-7-1. EventBridge ルールの削除
+
+パイプラインを起動するルールを、ターゲット（パイプラインの ARN）から探します。
+
+```bash
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+PIPELINE_ARN=arn:aws:codepipeline:$AWS_REGION:$AWS_ACCOUNT_ID:myweb-pipeline
+
+RULE_NAMES=$(aws events list-rule-names-by-target --target-arn $PIPELINE_ARN --query "RuleNames[]" --output text --region $AWS_REGION)
+echo $RULE_NAMES
+```
+
+`codepipeline-myweb-a-main-xxxxxx-rule` のようなルール名が表示されます。ルールはターゲットを外してから削除します。
+
+```bash
+for rule in $RULE_NAMES; do
+  TARGET_IDS=$(aws events list-targets-by-rule --rule $rule --query "Targets[].Id" --output text --region $AWS_REGION)
+  aws events remove-targets --rule $rule --ids $TARGET_IDS --region $AWS_REGION
+  aws events delete-rule --name $rule --region $AWS_REGION
+  echo "削除: $rule"
+done
+```
+
+#### 8-7-2. IAM ロールの確認
+
+ハンズオンで自動作成された IAM ロールを、名前で絞り込んで確認します。
+
+```bash
+ROLE_NAMES=$(aws iam list-roles --query "Roles[?contains(RoleName,'myweb-pipeline') || contains(RoleName,'myweb-build')].RoleName" --output text)
+echo $ROLE_NAMES
+```
+
+CodePipeline・CodeBuild・EventBridge 用の 3 つのロールが表示されることを確認します。
 
 > [!CAUTION]
-> アーティファクトストアの S3 バケットは、同じリージョンのほかのパイプラインと共用されている場合があります。ほかのパイプラインで使用していないことを確認してから削除してください。
+> ハンズオン以外のロールが表示された場合は、次の手順に進まず、`ROLE_NAMES` に削除するロール名だけを設定し直してください（例：`ROLE_NAMES="ロール名1 ロール名2"`）。
+
+#### 8-7-3. IAM ロールとポリシーの削除
+
+IAM ロールは、アタッチされたポリシーとインラインポリシーを外してから削除します。
+コンソールが作成したカスタマー管理ポリシー（`CodeBuildBasePolicy-...` など）は、ロールから外したあとに削除します。AWS 管理ポリシー（手順 4-8 でアタッチした `AmazonEC2ContainerRegistryPowerUser` など）は外すだけで、削除はしません。
+
+```bash
+for role in $ROLE_NAMES; do
+  # アタッチされている管理ポリシーを外す
+  for policy_arn in $(aws iam list-attached-role-policies --role-name $role --query "AttachedPolicies[].PolicyArn" --output text); do
+    aws iam detach-role-policy --role-name $role --policy-arn $policy_arn
+    # カスタマー管理ポリシー（自アカウントのポリシー）は、ほかで使われていなければ削除する
+    if [[ $policy_arn == arn:aws:iam::$AWS_ACCOUNT_ID:* ]]; then
+      ATTACHMENT_COUNT=$(aws iam get-policy --policy-arn $policy_arn --query "Policy.AttachmentCount" --output text)
+      if [ "$ATTACHMENT_COUNT" = "0" ]; then
+        # デフォルト以外のバージョンを削除してからポリシーを削除する
+        for v in $(aws iam list-policy-versions --policy-arn $policy_arn --query "Versions[?IsDefaultVersion==\`false\`].VersionId" --output text); do
+          aws iam delete-policy-version --policy-arn $policy_arn --version-id $v
+        done
+        aws iam delete-policy --policy-arn $policy_arn
+        echo "ポリシー削除: $policy_arn"
+      fi
+    fi
+  done
+  # インラインポリシーを削除する
+  for policy_name in $(aws iam list-role-policies --role-name $role --query "PolicyNames[]" --output text); do
+    aws iam delete-role-policy --role-name $role --policy-name $policy_name
+  done
+  # ロールを削除する
+  aws iam delete-role --role-name $role
+  echo "ロール削除: $role"
+done
+```
+
+ロールが残っていないことを確認します。何も表示されなければ完了です。
+
+```bash
+aws iam list-roles --query "Roles[?contains(RoleName,'myweb-pipeline') || contains(RoleName,'myweb-build')].RoleName" --output text
+```
+
+#### 8-7-4. CodeBuild のロググループの削除
+
+```bash
+aws logs delete-log-group --log-group-name /aws/codebuild/myweb-build --region $AWS_REGION
+```
+
+#### 8-7-5. アーティファクトストアの S3 バケットの確認
+
+CodePipeline が自動作成した S3 バケットを探し、中身を確認します。
+
+```bash
+BUCKET=$(aws s3api list-buckets --query "Buckets[?starts_with(Name,'codepipeline-$AWS_REGION-')].Name" --output text)
+echo $BUCKET
+
+aws s3 ls s3://$BUCKET/
+```
+
+バケット直下には、パイプラインごとのフォルダ（このハンズオンでは `myweb-pipeline/`）が表示されます。
+
+> [!CAUTION]
+> アーティファクトストアの S3 バケットは、同じリージョンのほかのパイプラインと共用されています。`myweb-pipeline/` 以外のフォルダが表示された場合は、バケットを削除せず、次の 8-7-6 で `myweb-pipeline/` フォルダだけを削除してください。
+> また、`echo $BUCKET` で複数のバケット名が表示された場合は、`BUCKET=バケット名` で削除するバケットを 1 つ設定し直してください。
+
+#### 8-7-6. アーティファクトストアの S3 バケットの削除
+
+`myweb-pipeline/` フォルダしかない場合は、バケットごと削除します。
+
+```bash
+aws s3 rb s3://$BUCKET --force
+```
+
+ほかのパイプラインのフォルダもある場合は、`myweb-pipeline/` フォルダだけを削除します。
+
+```bash
+aws s3 rm s3://$BUCKET/myweb-pipeline/ --recursive
+```
+
+> [!NOTE]
+> バケットでバージョニングが有効になっている場合、`aws s3 rb --force` が `BucketNotEmpty` エラーで失敗することがあります。その場合は、S3 コンソールでバケットを選択して **［空にする］** を実行してから、再度 `aws s3 rb s3://$BUCKET` を実行してください。
 
 ### 8-8. CloudShell 上のファイルの削除（任意）
 
