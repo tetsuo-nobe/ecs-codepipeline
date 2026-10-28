@@ -132,7 +132,7 @@ aws cloudformation wait stack-create-complete --stack-name ecs-blue-green --regi
 ```
 
 > [!TIP]
-> スタックの作成を待つ間に、手順 2・手順 3 を先に進めても構いません。
+> スタック作成が完了するまで待ちます。（約7～10分ほど）
 
 ### 1-5. 初期状態の確認
 
@@ -241,7 +241,7 @@ CodeCommit のコンソールで `myweb-app` リポジトリを開き、3 つの
 ### 4-1. ビルドプロジェクトの作成を開始
 
 1. マネジメントコンソールの検索バーで「CodeBuild」と入力し、CodeBuild のコンソールを開きます。
-2. 左メニューの **［ビルドプロジェクト］** を選択し、**［ビルドプロジェクトを作成する］** を選択します。
+2. 左メニューの **［ビルドプロジェクト］** を選択し、**［プロジェクトを作成する］** を選択します。
 
 ### 4-2. プロジェクトの設定
 
@@ -259,12 +259,13 @@ CodeCommit のコンソールで `myweb-app` リポジトリを開き、3 つの
 
 ### 4-4. 環境の設定
 
+- **コンピューティング**: `EC2`
 - **プロビジョニングモデル**: `オンデマンド`
 - **環境イメージ**: `マネージド型イメージ`
-- **コンピューティング**: `EC2`
+- **実行モード**: `コンテナ`
 - **オペレーティングシステム**: `Amazon Linux`
 - **ランタイム**: `Standard`
-- **イメージ**: `aws/codebuild/amazonlinux-x86_64-standard:5.0`
+- **イメージ**: `aws/codebuild/amazonlinux-x86_64-standard:6.0`
 - **サービスロール**: `新しいサービスロール`
   - **ロール名**: `codebuild-myweb-build-service-role`（自動入力された名前のままで構いません）
 
@@ -334,7 +335,7 @@ aws iam list-attached-role-policies --role-name codebuild-myweb-build-service-ro
 ### 5-3. パイプラインの設定
 
 - **パイプライン名**: `myweb-pipeline`
-- **実行モード**: `置き換え`（既定値）
+- **実行モード**: `キュー`（既定値）
 - **サービスロール**: `新しいサービスロール`
   - **ロール名**: 自動入力された名前のままで構いません
   - 「AWS CodePipeline がこのパイプラインで使用するサービスロールを作成することを許可する」にチェックが入っていることを確認
@@ -349,23 +350,24 @@ aws iam list-attached-role-policies --role-name codebuild-myweb-build-service-ro
 - **ソースプロバイダー**: `AWS CodeCommit`
 - **リポジトリ名**: `myweb-app`
 - **ブランチ名**: `main`
-- **検出オプションを変更する**: `Amazon EventBridge (推奨)`
+- **ソースの変更を自動的に検出する EventBridge ルールを作成**: `チェックする`
 - **出力アーティファクト形式**: `CodePipeline のデフォルト`
 
-**［次へ］** を選択します。
+**［次に］** を選択します。
 
 > [!NOTE]
 > 検出オプションに Amazon EventBridge を選ぶと、CodeCommit への push を検知してパイプラインを起動する EventBridge ルールが自動で作成されます。
 
 ### 5-5. ビルドステージの追加
 
-- **ビルドプロバイダー**: `その他のビルドプロバイダー` → `AWS CodeBuild`
-- **リージョン**: 作業中のリージョン
-- **入力アーティファクト**: `SourceArtifact`
+- **プロバイダーを構築する**: `その他のビルドプロバイダー` → `AWS CodeBuild`
 - **プロジェクト名**: `myweb-build`（手順 4 で作成したもの）
 - **ビルドタイプ**: `単一ビルド`
+- **リージョン**: 作業中のリージョン
+- **入力アーティファクト**: `SourceArtifact` （既定値）
 
-**［次へ］** を選択します。
+
+**［次に］** を選択します。
 
 ### 5-6. テストステージ
 
@@ -375,7 +377,7 @@ aws iam list-attached-role-policies --role-name codebuild-myweb-build-service-ro
 
 - **デプロイプロバイダー**: `Amazon ECS`
 - **リージョン**: 作業中のリージョン
-- **入力アーティファクト**: `BuildArtifact`
+- **入力アーティファクト**: `BuildArtifact`（既定値）
 - **クラスター名**: `ECS-VPC`
 - **サービス名**: `myweb-service`
 - **イメージ定義ファイル**: `imagedefinitions.json`
@@ -384,7 +386,7 @@ aws iam list-attached-role-policies --role-name codebuild-myweb-build-service-ro
 > [!IMPORTANT]
 > 「ステージ失敗時に自動再試行を有効にする」のような自動再試行の設定が表示される場合は、**チェックを外して** ください。手順 6 でデプロイの失敗を確認し、手順 7 で手動で再試行するためです。
 
-**［次へ］** を選択します。
+**［次に］** を選択します。
 
 > [!NOTE]
 > Blue/Green デプロイは Bake Time（5分）が経過するまで完了しないため、Deploy アクションは通常のローリングデプロイより時間がかかります。デプロイタイムアウトを指定する場合は、Bake Time より十分長い値にしてください。
