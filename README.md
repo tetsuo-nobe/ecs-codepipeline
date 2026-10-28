@@ -771,3 +771,59 @@ rm -rf ~/myweb-app ~/ecs-codepipeline
 - [Create a pipeline in CodePipeline (console)](https://docs.aws.amazon.com/codepipeline/latest/userguide/pipelines-create.html) — コンソールでのパイプライン作成手順
 - [Create a build project (console)](https://docs.aws.amazon.com/codebuild/latest/userguide/create-project-console.html) — コンソールでの CodeBuild プロジェクト作成手順
 - [Migrate CodeDeploy blue/green deployments to Amazon ECS blue/green deployments](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/migrate-codedeploy-to-ecs-bluegreen.html) — CI/CD から UpdateService を使う方式への移行
+
+---
+
+## 講師用：環境のクリーンアップを一括で行う
+
+`cleanup.sh` を実行すると、「環境のクリーンアップ」（手順 8-1〜8-8）の内容をまとめて実行できます。
+
+### 削除されるリソース
+
+- パイプラインを起動する EventBridge ルール
+- CodePipeline パイプライン `myweb-pipeline`
+- CodeBuild プロジェクト `myweb-build`
+- CodeCommit リポジトリ `myweb-app`
+- ECR リポジトリ `myweb`（イメージを含む）
+- CloudFormation スタック `ecs-blue-green`（VPC・ALB・ECS クラスター/サービス・Lambda・IAM ロールなど）
+- タスク定義 `myweb-task` の ACTIVE なリビジョン
+- コンソールで自動作成された IAM ロールとポリシー（ロール名に `myweb-pipeline` または `myweb-build` を含むもの）
+- ロググループ `/aws/codebuild/myweb-build`、`/aws/lambda/ecs-deployment-hook`
+- アーティファクトストアの S3 バケット（`codepipeline-<リージョン>-*`）
+- CloudShell 上の `~/myweb-app`
+
+> [!NOTE]
+> アーティファクトストアの S3 バケットにほかのパイプラインのフォルダがある場合は、バケットは削除せず、`myweb-pipeline/` フォルダだけを削除します。
+
+### 実行手順
+
+1. AWS マネジメントコンソールで、ハンズオンを実施したリージョンを選択して CloudShell を起動します。
+2. リージョンを設定します。
+
+   ```bash
+   export AWS_REGION=ap-northeast-1
+   ```
+
+3. リポジトリを取得していない場合は、クローンします。
+
+   ```bash
+   git clone https://github.com/tetsuo-nobe/ecs-codepipeline.git
+   ```
+
+4. スクリプトを実行します。
+
+   ```bash
+   cd ~/ecs-codepipeline
+   bash cleanup.sh
+   ```
+
+5. 削除対象のアカウント・リージョン・リソースが表示されます。特に **IAM ロール** と **S3 バケット** にハンズオン以外のものが含まれていないことを確認し、`yes` と入力します。
+6. 最後に `[INFO] クリーンアップが完了しました` と表示されれば完了です。スタックの削除を待つため、数分かかります。
+
+> [!NOTE]
+> 存在しないリソースはスキップされるため、途中で失敗した場合や受講者が一部を削除済みの場合も、そのまま再実行できます。
+> 確認を省略する場合は、`bash cleanup.sh -y` で実行します。
+
+> [!CAUTION]
+> 削除したリソースは元に戻せません。実行前に、表示されたアカウントとリージョンが正しいことを必ず確認してください。
+> スクリプトは `~/myweb-app` を削除しますが、`~/ecs-codepipeline` は削除しません。不要であれば、スクリプトの実行後に `rm -rf ~/ecs-codepipeline` で削除してください。
