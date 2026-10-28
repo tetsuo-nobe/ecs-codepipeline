@@ -12,30 +12,7 @@ CodeCommit に push すると、パイプラインが次の処理を自動で実
 
 Deploy アクションは、新しいタスク定義リビジョンを登録して ECS サービスを更新（UpdateService）します。ECS サービス側に `Strategy: BLUE_GREEN` を設定しているため、パイプライン経由のデプロイも ECS 組み込みの Blue/Green 方式で実行されます。ライフサイクルフック（Lambda）による検証と自動ロールバックもそのまま機能します。
 
-```mermaid
-flowchart LR
-    Dev[開発者<br/>CloudShell] -- git push --> CC[CodeCommit<br/>myweb-app]
-    CC -- 変更検知 --> EB[EventBridge]
-    EB -- 起動 --> CP
-
-    subgraph CP[CodePipeline: myweb-pipeline]
-        direction LR
-        S[Source] --> B[Build<br/>CodeBuild] --> D[Deploy<br/>Amazon ECS]
-    end
-
-    B -- docker push --> ECR[(ECR<br/>myweb)]
-    D -- UpdateService --> SVC
-
-    subgraph VPC[VPC: ECS-VPC]
-        ALB[ALB] --> TGB[myweb-tg-1]
-        ALB --> TGG[myweb-tg-2]
-        SVC[ECS サービス<br/>Strategy: BLUE_GREEN]
-        TGB --> T1[タスク 旧版]
-        TGG --> T2[タスク 新版]
-    end
-
-    SVC -- POST_SCALE_UP --> L[Lambda<br/>ecs-deployment-hook]
-```
+![](images/overview.png)
 
 ### フォルダ構成
 
