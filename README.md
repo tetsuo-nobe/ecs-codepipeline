@@ -68,9 +68,6 @@ flowchart LR
 > Docker イメージのビルドは CodeBuild が行うため、手元に Docker 環境は不要です。
 
 > [!NOTE]
-> コマンド実行後、プロンプトに戻らない場合は q キーを押下してください。
-
-> [!NOTE]
 > マネジメントコンソールの画面項目の名称は、コンソールの更新により本手順の記載と異なる場合があります。
 
 > [!IMPORTANT]
@@ -148,6 +145,11 @@ echo $ALB_URL
 ---
 
 ## 手順 2：ECR リポジトリを作成する（AWS CLI）
+
+> [!NOTE]
+> コマンド実行後、プロンプトに戻らない場合は q キーを押下してください。
+
+
 
 ### 2-1. ECR リポジトリの作成
 
@@ -314,6 +316,35 @@ aws iam list-attached-role-policies --role-name codebuild-myweb-build-service-ro
 > [!NOTE]
 > 手順 4-4 でロール名を変更した場合は、`--role-name` をその名前に読み替えてください。
 
+### 4-9. buildspec.yml の内容を確認（CloudShell）
+
+CodeBuild が実行するビルドの手順は、リポジトリ直下の `buildspec.yml` に書かれています。内容を表示します。
+
+```bash
+cat ~/myweb-app/buildspec.yml
+```
+
+`buildspec.yml` は、次のフェーズ（`phases`）の順にコマンドを実行します。
+
+| フェーズ | 処理内容 |
+|----------|----------|
+| `pre_build` | ECR にログインし、イメージタグ（コミット ID の先頭 7 文字）を決める |
+| `build` | `Dockerfile` から Docker イメージをビルドする |
+| `post_build` | イメージを ECR に Push し、`imagedefinitions.json` を作成する |
+
+最後の `artifacts` で、作成した `imagedefinitions.json` をビルドの出力（アーティファクト）として次のステージに渡します。
+
+`imagedefinitions.json` は、デプロイするコンテナ名とイメージ URI を書いたファイルで、次のような内容になります。
+
+```json
+[{"name":"myweb","imageUri":"123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/myweb:1a2b3c4"}]
+```
+
+手順 5 で作成するパイプラインの Deploy ステージは、このファイルを読み込みます。そして、タスク定義のコンテナ `myweb` のイメージを差し替えて、ECS サービスを更新します。
+
+> [!NOTE]
+> `buildspec.yml` の中の `$REPOSITORY_URI` と `$CONTAINER_NAME` には、手順 4-5 で設定した環境変数の値が入ります。
+
 ---
 
 ## 手順 5：CodePipeline パイプラインを作成する（マネジメントコンソール）
@@ -338,7 +369,7 @@ aws iam list-attached-role-policies --role-name codebuild-myweb-build-service-ro
 - **実行モード**: `キュー`（既定値）
 - **サービスロール**: `新しいサービスロール`
   - **ロール名**: 自動入力された名前のままで構いません
-  - 「AWS CodePipeline がこのパイプラインで使用するサービスロールを作成することを許可する」にチェックが入っていることを確認
+  - 「AWS CodePipeline がサービスロールを作成できるようになるため、この新しいパイプラインでの使用が可能になります。」にチェックが入っていることを確認
 
 **［次に］** を選択します。
 
@@ -384,7 +415,7 @@ aws iam list-attached-role-policies --role-name codebuild-myweb-build-service-ro
 - **デプロイタイムアウト**: 空欄のまま（既定値）
 
 > [!IMPORTANT]
-> **「ステージ障害時の自動ロールバックを有効にする」のチェックを外して** ください。
+> **「ステージ障害時の自動ロールバックを設定」のチェックを外して** ください。
 > このチェックが入っていると、Deploy ステージが失敗したときに、CodePipeline が前回成功したアーティファクト（Blue Page のイメージ）で自動的にデプロイをやり直します。手順 6 では ECS のライフサイクルフックによるロールバックだけを確認したいので、CodePipeline 側の自動ロールバックは無効にします。
 >
 > 自動再試行の設定が表示される場合も、同様にチェックを外してください。
@@ -409,7 +440,7 @@ aws codepipeline get-pipeline-state --name myweb-pipeline \
 ```
 
 > [!TIP]
-> Build ステージの **［詳細］** を選択すると、CodeBuild のビルドログを確認できます。ECR への Push と `imagedefinitions.json` の出力内容がログに表示されます。
+> Build ステージの **[AWS CodeBuild]** リンクを選択すると、CodeBuild のビルドログを確認できます。ECR への Push と `imagedefinitions.json` の出力内容がログに表示されます。
 
 ### 5-10. Blue/Green デプロイの進行を確認
 
@@ -482,7 +513,7 @@ Build ステージで Green Page のイメージがビルドされ、Deploy ス�
 POST_SCALE_UP ステージで Lambda が `FAILED` を返すため、ECS が自動的に Blue Page にロールバックし、パイプラインの Deploy ステージは `Failed` になります。
 
 > [!NOTE]
-> 手順 5-7 で「ステージ障害時の自動ロールバックを有効にする」のチェックを外し忘れた場合は、Deploy ステージの失敗後に、CodePipeline が Blue Page のイメージで自動的にデプロイし直します（パイプラインの実行履歴のトリガーに `AutomatedRollback` と表示されます）。画面は Blue Page のままなので、そのまま手順 6-5 に進んで構いません。
+> 手順 5-7 で「ステージ障害時の自動ロールバックの設定」のチェックを外し忘れた場合は、Deploy ステージの失敗後に、CodePipeline が Blue Page のイメージで自動的にデプロイし直します（パイプラインの実行履歴のトリガーに `AutomatedRollback` と表示されます）。画面は Blue Page のままなので、そのまま手順 6-5 に進んで構いません。
 
 ### 6-5. ECS のロールバックを確認
 
@@ -544,6 +575,9 @@ Bake Time（2分）経過後に Blue 側のタスクが終了し、Deploy ステ
 ALB の URL にアクセスすると Green Page が表示されます。
 
 ![](images/green.png)
+
+
+### お疲れさまでした！ AWS CodePipeline を使用し、Amazon ECS のサービスの新しいタスクを Blue/Green デプロイメントでデプロイしました。
 
 ---
 
