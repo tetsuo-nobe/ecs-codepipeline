@@ -513,7 +513,7 @@ Build ステージで Green Page のイメージがビルドされ、Deploy ス�
 POST_SCALE_UP ステージで Lambda が `FAILED` を返すため、ECS が自動的に Blue Page にロールバックし、パイプラインの Deploy ステージは `Failed` になります。
 
 > [!NOTE]
-> 手順 5-7 で「ステージ障害時の自動ロールバックの設定」のチェックを外し忘れた場合は、Deploy ステージの失敗後に、CodePipeline が Blue Page のイメージで自動的にデプロイし直します（パイプラインの実行履歴のトリガーに `AutomatedRollback` と表示されます）。画面は Blue Page のままなので、そのまま手順 6-5 に進んで構いません。
+> 手順 5-7 で「ステージ障害時の自動ロールバックを設定」のチェックを外し忘れた場合は、Deploy ステージの失敗後に、CodePipeline が Blue Page のイメージで自動的にデプロイし直します（パイプラインの実行履歴のトリガーに `AutomatedRollback` と表示されます）。画面は Blue Page のままなので、そのまま手順 6-5 に進んで構いません。
 
 ### 6-5. ECS のロールバックを確認
 
