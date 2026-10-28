@@ -330,7 +330,7 @@ aws iam list-attached-role-policies --role-name codebuild-myweb-build-service-ro
 
 ### 5-2. 作成オプションの選択
 
-- **カテゴリ**: `カスタムパイプラインを構築する` を選択し、**［次へ］** を選択します。
+- **カテゴリ**: `カスタムパイプラインを構築する` を選択し、**［次に］** を選択します。
 
 ### 5-3. パイプラインの設定
 
@@ -340,7 +340,7 @@ aws iam list-attached-role-policies --role-name codebuild-myweb-build-service-ro
   - **ロール名**: 自動入力された名前のままで構いません
   - 「AWS CodePipeline がこのパイプラインで使用するサービスロールを作成することを許可する」にチェックが入っていることを確認
 
-**［次へ］** を選択します。
+**［次に］** を選択します。
 
 > [!NOTE]
 > パイプラインタイプは V2 になります。アーティファクトストアは既定のロケーション（CodePipeline が自動作成する S3 バケット）を使用します。
@@ -356,7 +356,7 @@ aws iam list-attached-role-policies --role-name codebuild-myweb-build-service-ro
 **［次に］** を選択します。
 
 > [!NOTE]
-> 検出オプションに Amazon EventBridge を選ぶと、CodeCommit への push を検知してパイプラインを起動する EventBridge ルールが自動で作成されます。
+> 「ソースの変更を自動的に検出する EventBridge ルールを作成」にチェックを入れると、CodeCommit への push を検知してパイプラインを起動する EventBridge ルールが自動で作成されます。
 
 ### 5-5. ビルドステージの追加
 
