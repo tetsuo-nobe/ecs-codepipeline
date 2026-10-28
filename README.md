@@ -27,8 +27,8 @@ flowchart LR
     D -- UpdateService --> SVC
 
     subgraph VPC[VPC: ECS-VPC]
-        ALB[ALB] --> TGB[TG Blue]
-        ALB --> TGG[TG Green]
+        ALB[ALB] --> TGB[myweb-tg-1]
+        ALB --> TGG[myweb-tg-2]
         SVC[ECS サービス<br/>Strategy: BLUE_GREEN]
         TGB --> T1[タスク 旧版]
         TGG --> T2[タスク 新版]
@@ -392,7 +392,7 @@ aws iam list-attached-role-policies --role-name codebuild-myweb-build-service-ro
 **［次に］** を選択します。
 
 > [!NOTE]
-> Blue/Green デプロイは Bake Time（5分）が経過するまで完了しないため、Deploy アクションは通常のローリングデプロイより時間がかかります。デプロイタイムアウトを指定する場合は、Bake Time より十分長い値にしてください。
+> Blue/Green デプロイは Bake Time（2分）が経過するまで完了しないため、Deploy アクションは通常のローリングデプロイより時間がかかります。デプロイタイムアウトを指定する場合は、Bake Time より十分長い値にしてください。
 
 ### 5-8. 確認と作成
 
@@ -419,7 +419,7 @@ Deploy ステージでは ECS の Blue/Green デプロイが実行されます�
 aws ecs describe-services --cluster ECS-VPC --services myweb-service --query "services[0].deployments" --region $AWS_REGION
 ```
 
-Bake Time（5分）の間は、旧バージョン（nginx の初期ページ）と新バージョン（Blue Page）の両方のタスクが稼働しています。Bake Time 経過後に旧バージョンのタスクが終了し、Deploy ステージが `Succeeded` になります。
+Bake Time（2分）の間は、旧バージョン（nginx の初期ページ）と新バージョン（Blue Page）の両方のタスクが稼働しています。Bake Time 経過後に旧バージョンのタスクが終了し、Deploy ステージが `Succeeded` になります。
 
 ### 5-11. Blue Page の確認
 
@@ -537,7 +537,7 @@ aws codepipeline get-pipeline-state --name myweb-pipeline \
   --output table --region $AWS_REGION
 ```
 
-Bake Time（5分）経過後に Blue 側のタスクが終了し、Deploy ステージが `Succeeded` になります。
+Bake Time（2分）経過後に Blue 側のタスクが終了し、Deploy ステージが `Succeeded` になります。
 
 ### 7-4. Green Page の確認
 
