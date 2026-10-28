@@ -57,7 +57,7 @@ flowchart LR
 | 4 | CodeBuild プロジェクトを作成 | マネジメントコンソール |
 | 5 | CodePipeline パイプラインを作成し、Blue Page をデプロイ | マネジメントコンソール |
 | 6 | Lambda を FAIL にして Green Page を push し、ロールバックを確認 | AWS CLI + git |
-| 7 | Lambda を SUCCESS に戻して Deploy ステージを再試行 | AWS CLI |
+| 7 | Lambda を SUCCESS に戻してパイプラインを再実行 | AWS CLI |
 
 ## 前提条件
 
@@ -384,7 +384,10 @@ aws iam list-attached-role-policies --role-name codebuild-myweb-build-service-ro
 - **デプロイタイムアウト**: 空欄のまま（既定値）
 
 > [!IMPORTANT]
-> 「ステージ失敗時に自動再試行を有効にする」のような自動再試行の設定が表示される場合は、**チェックを外して** ください。手順 6 でデプロイの失敗を確認し、手順 7 で手動で再試行するためです。
+> **「ステージ障害時の自動ロールバックを有効にする」のチェックを外して** ください。
+> このチェックが入っていると、Deploy ステージが失敗したときに、CodePipeline が前回成功したアーティファクト（Blue Page のイメージ）で自動的にデプロイをやり直します。手順 6 では ECS のライフサイクルフックによるロールバックだけを確認したいので、CodePipeline 側の自動ロールバックは無効にします。
+>
+> 自動再試行の設定が表示される場合も、同様にチェックを外してください。
 
 **［次に］** を選択します。
 
@@ -478,6 +481,9 @@ aws codepipeline get-pipeline-state --name myweb-pipeline \
 Build ステージで Green Page のイメージがビルドされ、Deploy ステージで Blue/Green デプロイが開始されます。
 POST_SCALE_UP ステージで Lambda が `FAILED` を返すため、ECS が自動的に Blue Page にロールバックし、パイプラインの Deploy ステージは `Failed` になります。
 
+> [!NOTE]
+> 手順 5-7 で「ステージ障害時の自動ロールバックを有効にする」のチェックを外し忘れた場合は、Deploy ステージの失敗後に、CodePipeline が Blue Page のイメージで自動的にデプロイし直します（パイプラインの実行履歴のトリガーに `AutomatedRollback` と表示されます）。画面は Blue Page のままなので、そのまま手順 6-5 に進んで構いません。
+
 ### 6-5. ECS のロールバックを確認
 
 マネジメントコンソールで ECS サービスのページのデプロイタブを選択すると、ロールバックの情報を確認できます。
@@ -496,7 +502,7 @@ aws logs tail /aws/lambda/ecs-deployment-hook --since 30m --region $AWS_REGION
 
 ---
 
-## 手順 7：Deploy ステージを再試行して Green Page をデプロイする
+## 手順 7：パイプラインを再実行して Green Page をデプロイする
 
 ### 7-1. Lambda の環境変数を SUCCESS に戻す
 
@@ -507,25 +513,19 @@ aws lambda update-function-configuration \
   --region $AWS_REGION
 ```
 
-### 7-2. 失敗した Deploy ステージを再試行
+### 7-2. パイプラインを再実行
 
-ソースを変更せずに、失敗した Deploy ステージだけを同じアーティファクト（Green Page のイメージ）で再実行します。
+ソースは変更せずに、パイプラインを手動で再実行します。CodeCommit の `main` ブランチの最新のコミット（Green Page に変更したコミット）で、Source → Build → Deploy が実行されます。
 
 ```bash
-EXECUTION_ID=$(aws codepipeline get-pipeline-state --name myweb-pipeline \
-  --query "stageStates[?stageName=='Deploy'].latestExecution.pipelineExecutionId" \
-  --output text --region $AWS_REGION)
-
-aws codepipeline retry-stage-execution \
-  --pipeline-name myweb-pipeline \
-  --stage-name Deploy \
-  --pipeline-execution-id $EXECUTION_ID \
-  --retry-mode FAILED_ACTIONS \
-  --region $AWS_REGION
+aws codepipeline start-pipeline-execution --name myweb-pipeline --region $AWS_REGION
 ```
 
 > [!NOTE]
-> CodePipeline のコンソールで、Deploy ステージの **［再試行］** を選択しても同じ操作ができます。
+> CodePipeline のコンソールで、パイプラインの **［変更をリリースする］** を選択しても同じ操作ができます。
+
+> [!TIP]
+> 失敗した Deploy ステージだけを再試行する方法（`aws codepipeline retry-stage-execution` やコンソールの **［再試行］**）もあります。ただし、CodePipeline の自動ロールバックが動いた場合は、Deploy ステージの最新の実行がロールバックの実行（Blue Page のデプロイ）に置き換わるため、Green Page のデプロイを再試行できません。パイプライン全体を再実行すれば、自動ロールバックの有無にかかわらず、最新のコミットを確実にデプロイできます。
 
 ### 7-3. デプロイの完了を確認
 
